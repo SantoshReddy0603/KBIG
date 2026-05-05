@@ -1,6 +1,45 @@
 import { useEffect, useState, useCallback } from 'react';
 import { fetchApi } from '../hooks/useApi';
-import { Building2, RefreshCw, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { Building2, RefreshCw, CheckCircle2, AlertCircle, Clock, PlusCircle, X } from 'lucide-react';
+
+type DeptName = 'Shop & Establishment' | 'KSPCB' | 'Factories';
+
+const DEPT_FIELDS: Record<DeptName, { key: string; label: string; required?: boolean; type?: string; options?: string[] }[]> = {
+  'Shop & Establishment': [
+    { key: 'business_name', label: 'Business Name', required: true },
+    { key: 'owner_name', label: 'Owner / Proprietor Name', required: true },
+    { key: 'address', label: 'Address', required: true },
+    { key: 'pin_code', label: 'PIN Code', required: true },
+    { key: 'phone', label: 'Phone Number' },
+    { key: 'pan', label: 'PAN' },
+    { key: 'gstin', label: 'GSTIN' },
+    { key: 'licence_number', label: 'Licence Number' },
+    { key: 'last_renewed', label: 'Last Renewed Date', type: 'date' },
+    { key: 'status', label: 'Status', options: ['Active', 'Dormant', 'Closed'] },
+  ],
+  'KSPCB': [
+    { key: 'business_name', label: 'Business Name', required: true },
+    { key: 'owner_name', label: 'Owner / Proprietor Name', required: true },
+    { key: 'address', label: 'Address', required: true },
+    { key: 'pin_code', label: 'PIN Code', required: true },
+    { key: 'phone', label: 'Phone Number' },
+    { key: 'pan', label: 'PAN' },
+    { key: 'consent_number', label: 'Consent Number' },
+    { key: 'last_filing_date', label: 'Last Filing Date', type: 'date' },
+    { key: 'inspection_date', label: 'Last Inspection Date', type: 'date' },
+  ],
+  'Factories': [
+    { key: 'business_name', label: 'Business Name', required: true },
+    { key: 'owner_name', label: 'Owner / Proprietor Name', required: true },
+    { key: 'address', label: 'Address', required: true },
+    { key: 'pin_code', label: 'PIN Code', required: true },
+    { key: 'phone', label: 'Phone Number' },
+    { key: 'gstin', label: 'GSTIN' },
+    { key: 'factory_licence', label: 'Factory Licence Number' },
+    { key: 'last_inspection', label: 'Last Inspection Date', type: 'date' },
+    { key: 'sector', label: 'Sector', options: ['Manufacturing', 'Food Processing', 'Agriculture', 'Construction', 'Mining', 'Textiles', 'Chemicals', 'Electronics'] },
+  ],
+};
 
 interface Department {
   name: string;
@@ -11,10 +50,27 @@ interface Department {
   in_review: number;
 }
 
+const DEPT_COLORS: Record<string, string> = {
+  'Shop & Establishment': 'bg-blue-600',
+  'KSPCB': 'bg-emerald-600',
+  'Factories': 'bg-amber-600',
+};
+
+const DEPT_ICONS: Record<string, string> = {
+  'Shop & Establishment': 'SE',
+  'KSPCB': 'KS',
+  'Factories': 'FA',
+};
+
 export default function Departments() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [addModal, setAddModal] = useState<DeptName | null>(null);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -48,17 +104,48 @@ export default function Departments() {
     setSyncing(null);
   };
 
-  const deptIcons: Record<string, string> = {
-    'Shop & Establishment': 'SE',
-    'KSPCB': 'KS',
-    'Factories': 'FA',
+  const openAddModal = (dept: DeptName) => {
+    setForm({});
+    setSuccessMsg('');
+    setErrorMsg('');
+    setAddModal(dept);
   };
 
-  const deptColors: Record<string, string> = {
-    'Shop & Establishment': 'bg-blue-600',
-    'KSPCB': 'bg-emerald-600',
-    'Factories': 'bg-amber-600',
+  const closeModal = () => {
+    setAddModal(null);
+    setSuccessMsg('');
+    setErrorMsg('');
   };
+
+  const handleSubmit = async () => {
+    if (!addModal) return;
+    const fields = DEPT_FIELDS[addModal];
+    const required = fields.filter(f => f.required);
+    for (const f of required) {
+      if (!form[f.key]?.trim()) {
+        setErrorMsg(`"${f.label}" is required.`);
+        return;
+      }
+    }
+    setSubmitting(true);
+    setErrorMsg('');
+    try {
+      const result = await fetchApi<{ success: boolean; record_id: string; message: string }>('/records', {
+        method: 'POST',
+        body: JSON.stringify({ department: addModal, ...form }),
+      });
+      setSuccessMsg(`✅ Record added! ID: ${result.record_id}. Matching engine re-run automatically.`);
+      setForm({});
+      await loadData();
+      window.dispatchEvent(new CustomEvent('kbig-data-changed'));
+    } catch (e: any) {
+      setErrorMsg('Failed to add record. Please try again.');
+    }
+    setSubmitting(false);
+  };
+
+  const deptColors = DEPT_COLORS;
+  const deptIcons = DEPT_ICONS;
 
   return (
     <div className="p-4 lg:p-6 space-y-6">
