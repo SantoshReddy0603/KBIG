@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { fetchApi } from '../hooks/useApi';
 import { CheckCircle2, XCircle, GitBranch, Pause, ArrowRight, Clock } from 'lucide-react';
+import { notifyDataChanged, showToast } from '../utils/appEvents';
+import { useRole } from '../context/RoleContext';
 
 interface ReviewItem {
   pair_id: string;
@@ -27,20 +29,29 @@ interface AuditEntry {
   timestamp: string;
   reviewer_id: string;
   pair_id: string;
+  action_type?: 'review' | 'sync' | 'threshold' | 'event_review';
   decision: string;
-  record_a: any;
-  record_b: any;
+  record_a: any | null;
+  record_b: any | null;
   confidence: number;
 }
 
 export default function ReviewerPortal() {
+  const { isAdmin } = useRole();
   const [queue, setQueue] = useState<ReviewItem[]>([]);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'queue' | 'audit'>('queue');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const loadData = useCallback(async () => {
+    if (!isAdmin) {
+      setQueue([]);
+      setAuditLog([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const [queueData, auditData] = await Promise.all([
@@ -48,12 +59,12 @@ export default function ReviewerPortal() {
         fetchApi<AuditEntry[]>('/audit-log'),
       ]);
       setQueue(queueData);
-      setAuditLog(auditData);
-    } catch (e) {
-      console.error('Failed to load review data', e);
+      setAuditLog(auditData.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+    } catch (error: any) {
+      setErrorMessage(error.message || 'Failed to load review data.');
     }
     setLoading(false);
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -65,21 +76,25 @@ export default function ReviewerPortal() {
 
   const submitDecision = async (pairId: string, decision: string) => {
     setActionLoading(pairId);
+    setErrorMessage('');
     try {
       await fetchApi(`/review/${encodeURIComponent(pairId)}`, {
         method: 'POST',
         body: JSON.stringify({ decision, reviewer_id: 'reviewer_001' }),
       });
       await loadData();
-      window.dispatchEvent(new CustomEvent('kbig-data-changed'));
-    } catch (e) {
-      console.error('Decision failed', e);
+      notifyDataChanged();
+      showToast('success', `Review decision saved: ${decision}.`);
+    } catch (error: any) {
+      const message = error.message || 'Decision failed.';
+      setErrorMessage(message);
+      showToast('error', message);
     }
     setActionLoading(null);
   };
 
-  const highlightDiff = (valA: string, valB: string, field: string) => {
-    if (!valA || !valB) return { a: valA || '—', b: valB || '—', diff: true };
+  const highlightDiff = (valA: string, valB: string) => {
+    if (!valA || !valB) return { a: valA || 'Not Available', b: valB || 'Not Available', diff: true };
     const normA = valA.toLowerCase().replace(/[^a-z0-9]/g, '');
     const normB = valB.toLowerCase().replace(/[^a-z0-9]/g, '');
     return { a: valA, b: valB, diff: normA !== normB };
@@ -99,6 +114,7 @@ export default function ReviewerPortal() {
   );
 
   const fieldsToCompare = [
+    { key: 'ubid', label: 'UBID' },
     { key: 'business_name', label: 'Business Name' },
     { key: 'owner_name', label: 'Owner Name' },
     { key: 'address', label: 'Address' },
@@ -110,8 +126,14 @@ export default function ReviewerPortal() {
 
   return (
     <div className="p-4 lg:p-6 space-y-6">
+      {!isAdmin && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+          Review queue access is available in Admin (KBIG) view.
+        </div>
+      )}
+
       {/* Tab header */}
-      <div className="flex items-center gap-4 border-b border-slate-200 pb-3">
+      {isAdmin && <div className="flex items-center gap-4 border-b border-slate-200 pb-3">
         <button
           onClick={() => setActiveTab('queue')}
           className={`text-sm font-medium pb-2 border-b-2 transition-colors ${activeTab === 'queue' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
@@ -124,9 +146,15 @@ export default function ReviewerPortal() {
         >
           Audit Log ({auditLog.length})
         </button>
-      </div>
+      </div>}
 
-      {activeTab === 'queue' && (
+      {errorMessage && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
+      {isAdmin && activeTab === 'queue' && (
         loading ? (
           <div className="text-center py-12 text-slate-400">Loading review queue...</div>
         ) : queue.length === 0 ? (
@@ -166,11 +194,11 @@ export default function ReviewerPortal() {
                       </div>
                       <div className="space-y-2">
                         {fieldsToCompare.map(f => {
-                          const { a, diff } = highlightDiff(String(recA[f.key] || ''), String(recB[f.key] || ''), f.key);
+                          const { a, diff } = highlightDiff(String(recA[f.key] || ''), String(recB[f.key] || ''));
                           return (
                             <div key={f.key} className={`flex gap-2 text-xs ${diff ? 'bg-amber-50 -mx-2 px-2 py-1 rounded' : ''}`}>
                               <span className="text-slate-500 w-24 shrink-0">{f.label}</span>
-                              <span className={`font-medium ${diff ? 'text-amber-800' : 'text-slate-900'}`}>{a || '—'}</span>
+                              <span className={`font-medium ${diff ? 'text-amber-800' : 'text-slate-900'}`}>{a}</span>
                             </div>
                           );
                         })}
@@ -183,11 +211,11 @@ export default function ReviewerPortal() {
                       </div>
                       <div className="space-y-2">
                         {fieldsToCompare.map(f => {
-                          const { b, diff } = highlightDiff(String(recA[f.key] || ''), String(recB[f.key] || ''), f.key);
+                          const { b, diff } = highlightDiff(String(recA[f.key] || ''), String(recB[f.key] || ''));
                           return (
                             <div key={f.key} className={`flex gap-2 text-xs ${diff ? 'bg-amber-50 -mx-2 px-2 py-1 rounded' : ''}`}>
                               <span className="text-slate-500 w-24 shrink-0">{f.label}</span>
-                              <span className={`font-medium ${diff ? 'text-amber-800' : 'text-slate-900'}`}>{b || '—'}</span>
+                              <span className={`font-medium ${diff ? 'text-amber-800' : 'text-slate-900'}`}>{b}</span>
                             </div>
                           );
                         })}
@@ -199,13 +227,13 @@ export default function ReviewerPortal() {
                   <div className="px-6 py-4 bg-slate-50 border-t border-slate-200">
                     <p className="text-xs font-semibold text-slate-600 mb-3">Signal Breakdown</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-                      {signalBar('PAN Match', item.signals.pan_match, 0.90)}
-                      {signalBar('GSTIN Match', item.signals.gstin_match, 0.90)}
-                      {signalBar('Name Similarity', item.signals.name_similarity, 0.65)}
-                      {signalBar('PIN Match', item.signals.pin_match, 0.20)}
-                      {signalBar('Address Overlap', item.signals.address_overlap, 0.40)}
-                      {signalBar('Phone Match', item.signals.phone_match, 0.55)}
-                      {signalBar('Owner Similarity', item.signals.owner_similarity, 0.45)}
+                      {signalBar('PAN Match', item.signals.pan_match, 1)}
+                      {signalBar('GSTIN Match', item.signals.gstin_match, 1)}
+                      {signalBar('Name Similarity', item.signals.name_similarity, 1)}
+                      {signalBar('PIN Match', item.signals.pin_match, 1)}
+                      {signalBar('Address Overlap', item.signals.address_overlap, 1)}
+                      {signalBar('Phone Match', item.signals.phone_match, 1)}
+                      {signalBar('Owner Similarity', item.signals.owner_similarity, 1)}
                     </div>
                   </div>
 
@@ -247,7 +275,7 @@ export default function ReviewerPortal() {
         )
       )}
 
-      {activeTab === 'audit' && (
+      {isAdmin && activeTab === 'audit' && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           {auditLog.length === 0 ? (
             <div className="p-12 text-center text-slate-400 text-sm">No reviewer actions recorded yet.</div>
@@ -272,8 +300,8 @@ export default function ReviewerPortal() {
                         {new Date(entry.timestamp).toLocaleString()}
                       </td>
                       <td className="px-4 py-3 text-xs font-mono">{entry.reviewer_id}</td>
-                      <td className="px-4 py-3 text-xs font-mono">{entry.record_a.record_id}</td>
-                      <td className="px-4 py-3 text-xs font-mono">{entry.record_b.record_id}</td>
+                      <td className="px-4 py-3 text-xs font-mono">{entry.record_a?.record_id || (entry.action_type === 'sync' ? 'Sync' : 'Not Available')}</td>
+                      <td className="px-4 py-3 text-xs font-mono">{entry.record_b?.record_id || (entry.action_type === 'sync' ? 'Batch' : 'Not Available')}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${
                           entry.decision === 'approved' ? 'bg-emerald-50 text-emerald-700' :
@@ -281,7 +309,7 @@ export default function ReviewerPortal() {
                           entry.decision === 'split' ? 'bg-amber-50 text-amber-700' :
                           'bg-slate-100 text-slate-700'
                         }`}>
-                          {entry.decision}
+                          {entry.action_type === 'sync' ? 'sync' : entry.decision}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-xs font-mono">{(entry.confidence * 100).toFixed(1)}%</td>

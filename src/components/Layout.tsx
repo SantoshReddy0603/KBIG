@@ -1,29 +1,42 @@
-import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, ClipboardCheck, Building2, ScrollText, Activity } from 'lucide-react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, ClipboardCheck, Building2, ScrollText, Activity, PlusCircle, Upload, RefreshCw, LogOut, BarChart3 } from 'lucide-react';
 import { useState } from 'react';
 import { fetchApi } from '../hooks/useApi';
+import ToastHost from './ToastHost';
+import { notifyDataChanged, showToast } from '../utils/appEvents';
+import { useRole } from '../context/RoleContext';
 
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/review', label: 'Reviewer Portal', icon: ClipboardCheck },
-  { to: '/departments', label: 'Departments', icon: Building2 },
-  { to: '/audit-log', label: 'Audit Log', icon: ScrollText },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
+  { to: '/review', label: 'Reviewer Portal', icon: ClipboardCheck, adminOnly: true },
+  { to: '/sync', label: 'Sync', icon: RefreshCw, adminOnly: true },
+  { to: '/departments', label: 'Departments', icon: Building2, adminOnly: false },
+  { to: '/analytics', label: 'Analytics', icon: BarChart3, adminOnly: false },
+  { to: '/audit-log', label: 'Audit Log', icon: ScrollText, adminOnly: true },
 ];
 
 export default function Layout() {
   const [matching, setMatching] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const navigate = useNavigate();
+  const { roleLabel, clearRole, isAdmin } = useRole();
+  const visibleNavItems = navItems.filter(item => isAdmin || !item.adminOnly);
 
   const runMatching = async () => {
     setMatching(true);
     try {
       await fetchApi('/match', { method: 'POST' });
-      await fetchApi('/classify', { method: 'POST' });
-      window.dispatchEvent(new CustomEvent('kbig-data-changed'));
-    } catch (e) {
-      console.error('Matching failed', e);
+      notifyDataChanged();
+      showToast('success', 'Matching engine recomputed with reviewer decisions preserved.');
+    } catch (e: any) {
+      showToast('error', e.message || 'Matching failed.');
     }
     setMatching(false);
+  };
+
+  const switchRole = () => {
+    clearRole();
+    navigate('/');
   };
 
   return (
@@ -46,11 +59,11 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {navItems.map(item => (
+          {visibleNavItems.map(item => (
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/'}
+              end={item.to === '/dashboard'}
               onClick={() => setSidebarOpen(false)}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
@@ -89,14 +102,43 @@ export default function Layout() {
               {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </span>
           </div>
-          <button
-            onClick={runMatching}
-            disabled={matching}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <Activity size={16} className={matching ? 'animate-spin' : ''} />
-            {matching ? 'Running...' : 'Run Matching Engine'}
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="hidden rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600 lg:inline-flex">
+              Viewing as: {roleLabel}
+            </span>
+            <NavLink
+              to="/add-record"
+              className="flex items-center gap-2 px-3 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors"
+            >
+              <PlusCircle size={16} />
+              <span className="hidden sm:inline">Add Record</span>
+            </NavLink>
+            <NavLink
+              to="/upload-csv"
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              <Upload size={16} />
+              <span className="hidden sm:inline">Upload CSV</span>
+            </NavLink>
+            {isAdmin && (
+              <button
+                onClick={runMatching}
+                disabled={matching}
+                className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Activity size={16} className={matching ? 'animate-spin' : ''} />
+                <span className="hidden md:inline">{matching ? 'Running...' : 'Run Matching Engine'}</span>
+                <span className="md:hidden">{matching ? 'Run...' : 'Match'}</span>
+              </button>
+            )}
+            <button
+              onClick={switchRole}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+            >
+              <LogOut size={16} />
+              <span className="hidden sm:inline">Switch Role</span>
+            </button>
+          </div>
         </header>
 
         {/* Page content */}
@@ -104,6 +146,7 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      <ToastHost />
     </div>
   );
 }
